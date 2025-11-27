@@ -305,8 +305,26 @@ def search_product(query):
                 pid = m.group(1)
                 if pid not in seen:
                     seen.add(pid)
+                    
+                    # Essayer plusieurs methodes pour obtenir le nom
                     name = link.get_text(strip=True)
-                    if name and len(name) > 10 and 'CHF' not in name:
+                    
+                    # Si pas de texte, chercher dans title ou alt de l'image
+                    if not name or len(name) < 10:
+                        name = link.get('title', '')
+                    if not name or len(name) < 10:
+                        img = link.find('img')
+                        if img:
+                            name = img.get('alt', '')
+                    
+                    # En dernier recours, extraire de l'URL
+                    if not name or len(name) < 10:
+                        url_match = re.search(r'/preisvergleich/[^/]+/([^?]+)-p\d+', href)
+                        if url_match:
+                            name = url_match.group(1).replace('-', ' ')
+                    
+                    # Filtrer les noms avec CHF (ce sont des liens de prix)
+                    if name and len(name) > 5 and 'CHF' not in name:
                         products.append({
                             'id': pid,
                             'name': name[:100],
