@@ -28,7 +28,7 @@ except ImportError:
 
 CHECK_INTERVAL_HOURS = 6
 CONFIG_FILE = "tracked_products.json"
-VERSION = "2.1"
+VERSION = "2.2"
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -40,6 +40,107 @@ HEADERS = {
 # =============================================================================
 # UTILITAIRES
 # =============================================================================
+
+def get_key():
+    """
+    Lit une touche du clavier (sans attendre Entree).
+    Retourne: 'up', 'down', 'enter', ou le caractere
+    """
+    if HAS_MSVCRT:
+        # Windows
+        key = msvcrt.getch()
+        if key == b'\xe0':  # Touche speciale (fleches)
+            key2 = msvcrt.getch()
+            if key2 == b'H':
+                return 'up'
+            elif key2 == b'P':
+                return 'down'
+            elif key2 == b'K':
+                return 'left'
+            elif key2 == b'M':
+                return 'right'
+        elif key == b'\r':  # Entree
+            return 'enter'
+        elif key == b'\x1b':  # Echap
+            return 'esc'
+        else:
+            return key.decode('utf-8', errors='ignore').lower()
+    else:
+        # Unix
+        import tty
+        import termios
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            key = sys.stdin.read(1)
+            if key == '\x1b':  # Sequence echappement
+                key2 = sys.stdin.read(2)
+                if key2 == '[A':
+                    return 'up'
+                elif key2 == '[B':
+                    return 'down'
+                return 'esc'
+            elif key == '\r' or key == '\n':
+                return 'enter'
+            return key.lower()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def interactive_menu(title, options, box_color=None):
+    """
+    Affiche un menu interactif avec navigation fleches.
+    options: liste de tuples (id, label, color, enabled)
+    Retourne l'id de l'option selectionnee
+    """
+    if box_color is None:
+        box_color = C.YLW
+    
+    selected = 0
+    
+    while True:
+        UI.header()
+        
+        print()
+        print(box_color + UI.box_top() + C.RST)
+        print(box_color + UI.box_row(title, 'center', C.BOLD) + C.RST)
+        print(box_color + UI.box_mid() + C.RST)
+        print(box_color + UI.box_row("") + C.RST)
+        
+        for i, (opt_id, label, color, enabled) in enumerate(options):
+            if i == selected:
+                # Option selectionnee - fond inverse
+                prefix = " >> "
+                style = C.BOLD + '\033[7m'  # Inverse video
+            else:
+                prefix = "    "
+                style = color if enabled else C.DIM
+            
+            line = f"{prefix}{label}"
+            print(box_color + UI.box_row(line, color=style) + C.RST)
+        
+        print(box_color + UI.box_row("") + C.RST)
+        print(box_color + UI.box_mid() + C.RST)
+        print(box_color + UI.box_row("Fleches: naviguer  |  Entree: valider", 'center', C.DIM) + C.RST)
+        print(box_color + UI.box_bot() + C.RST)
+        
+        # Lire la touche
+        key = get_key()
+        
+        if key == 'up':
+            selected = (selected - 1) % len(options)
+        elif key == 'down':
+            selected = (selected + 1) % len(options)
+        elif key == 'enter':
+            return options[selected][0]
+        elif key == 'esc' or key == 'q':
+            # Chercher l'option quitter
+            for opt_id, label, color, enabled in options:
+                if opt_id == 'q':
+                    return 'q'
+            return options[-1][0]  # Derniere option par defaut
+
 
 def wait_with_keycheck(seconds):
     """
@@ -747,36 +848,29 @@ def start_multi_tracking(data):
 # =============================================================================
 
 def screen_main_menu():
-    """Menu principal"""
+    """Menu principal avec navigation interactive"""
     data = load_tracked_products()
     nb_products = len(data['products'])
     nb_active = len([p for p in data['products'] if p.get('active', True)])
     
-    UI.header()
+    # Construire les options du menu
+    options = [
+        ('1', "Ajouter un article a suivre", C.WHT, True),
+        ('2', f"Voir les articles suivis ({nb_products})", C.WHT, True),
+        ('3', "Supprimer un article", C.WHT, True),
+        ('4', "Configurer Discord", C.WHT, True),
+    ]
     
-    print()
-    print(C.YLW + UI.box_top() + C.RST)
-    print(C.YLW + UI.box_row("MENU PRINCIPAL", 'center', C.BOLD) + C.RST)
-    print(C.YLW + UI.box_mid() + C.RST)
-    print(C.YLW + UI.box_row("") + C.RST)
-    print(C.YLW + UI.box_row(f"  [1]  Ajouter un article a suivre", color=C.WHT) + C.RST)
-    print(C.YLW + UI.box_row(f"  [2]  Voir les articles suivis ({nb_products})", color=C.WHT) + C.RST)
-    print(C.YLW + UI.box_row(f"  [3]  Supprimer un article", color=C.WHT) + C.RST)
-    print(C.YLW + UI.box_row(f"  [4]  Configurer Discord", color=C.WHT) + C.RST)
-    print(C.YLW + UI.box_row("") + C.RST)
-    print(C.YLW + UI.box_mid() + C.RST)
-    
+    # Option de suivi
     if nb_active > 0:
-        print(C.YLW + UI.box_row(f"  [S]  DEMARRER LE SUIVI ({nb_active} actifs)", color=C.BGRN) + C.RST)
+        options.append(('s', f"DEMARRER LE SUIVI ({nb_active} actifs)", C.BGRN, True))
     else:
-        print(C.YLW + UI.box_row(f"  [S]  Demarrer le suivi (aucun article)", color=C.DIM) + C.RST)
+        options.append(('s', "Demarrer le suivi (aucun article)", C.DIM, False))
     
-    print(C.YLW + UI.box_row(f"  [Q]  Quitter", color=C.DIM) + C.RST)
-    print(C.YLW + UI.box_row("") + C.RST)
-    print(C.YLW + UI.box_bot() + C.RST)
+    # Option quitter
+    options.append(('q', "Quitter", C.DIM, True))
     
-    choice = UI.prompt("Choix").lower()
-    return choice
+    return interactive_menu("MENU PRINCIPAL", options)
 
 
 def screen_list_products():
