@@ -357,32 +357,52 @@ def get_product_details(url, silent=False):
         if ref_m:
             reference = ref_m.group(1)
         
-        # Extraction des offres
+        # Extraction des offres avec BeautifulSoup
         offers = []
         seen = set()
         
-        # Pattern: CHF XXX inkl. Versand:Y.YY ... /shops/SHOPNAME-sID
-        pattern = r'CHF\s*([\d\'\.,]+)\s*inkl\.\s*Versand[:\s]*[\d\.,]+[^/]{0,200}?/shops/([\w\-\.]+)-s(\d+)'
-        matches = re.findall(pattern, text, re.DOTALL)
+        # Trouver tous les logos de shops
+        shop_logos = soup.select('.Plugin_ShopLogo')
         
-        for price, shop_slug, shop_id in matches:
-            # Nettoyer le nom du shop
-            shop = shop_slug.replace('-', ' ').strip()
+        for logo in shop_logos:
+            # Trouver le nom du shop depuis l'image
+            img = logo.find('img')
+            if not img:
+                continue
+            shop_name = img.get('alt') or img.get('title') or ''
+            shop_name = shop_name.strip()
             
-            if shop and len(shop) > 1 and shop not in seen:
-                seen.add(shop)
-                price_clean = price.replace("'", "").replace(",", ".")
-                try:
-                    price_float = float(price_clean)
-                    offers.append({
-                        'shop': shop,
-                        'price': price_float,
-                    })
-                except ValueError:
-                    pass
-                
-                if len(offers) >= 20:
+            if not shop_name or shop_name in seen:
+                continue
+            
+            # Remonter pour trouver le conteneur de l'offre
+            # Le prix est dans un frere/parent avec class priceContainer
+            parent = logo
+            price_found = None
+            
+            # Chercher dans les parents/freres
+            for _ in range(10):
+                parent = parent.parent
+                if not parent:
                     break
+                
+                # Chercher le prix dans ce conteneur
+                price_div = parent.select_one('.Plugin_Price')
+                if price_div:
+                    price_text = price_div.get_text(strip=True)
+                    price_clean = price_text.replace("'", "").replace(",", ".").strip()
+                    try:
+                        price_found = float(price_clean)
+                        break
+                    except ValueError:
+                        pass
+            
+            if price_found and shop_name not in seen:
+                seen.add(shop_name)
+                offers.append({
+                    'shop': shop_name,
+                    'price': price_found,
+                })
         
         # Trier par prix
         offers.sort(key=lambda x: x['price'])
