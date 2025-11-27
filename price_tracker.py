@@ -12,6 +12,15 @@ from datetime import datetime
 import json
 import os
 import sys
+import threading
+
+# Pour la detection de touche
+try:
+    import msvcrt  # Windows
+    HAS_MSVCRT = True
+except ImportError:
+    HAS_MSVCRT = False
+    import select  # Unix
 
 # =============================================================================
 # CONFIGURATION
@@ -19,13 +28,47 @@ import sys
 
 CHECK_INTERVAL_HOURS = 6
 CONFIG_FILE = "tracked_products.json"
-VERSION = "2.0"
+VERSION = "2.1"
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Accept-Language': 'fr-CH,fr;q=0.9,de;q=0.8',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 }
+
+
+# =============================================================================
+# UTILITAIRES
+# =============================================================================
+
+def wait_with_keycheck(seconds):
+    """
+    Attend pendant 'seconds' secondes, mais verifie regulierement 
+    si la touche M est pressee pour retourner au menu.
+    Retourne True si M est presse, False sinon.
+    """
+    end_time = time.time() + seconds
+    
+    while time.time() < end_time:
+        # Verifier si une touche est pressee
+        if HAS_MSVCRT:
+            # Windows
+            if msvcrt.kbhit():
+                key = msvcrt.getch().decode('utf-8', errors='ignore').lower()
+                if key == 'm':
+                    return True
+        else:
+            # Unix - utilise select pour verifier stdin
+            if select.select([sys.stdin], [], [], 0)[0]:
+                key = sys.stdin.read(1).lower()
+                if key == 'm':
+                    return True
+        
+        # Petite pause pour ne pas surcharger le CPU
+        time.sleep(0.5)
+    
+    return False
+
 
 # =============================================================================
 # COULEURS ANSI
@@ -681,15 +724,22 @@ def start_multi_tracking(data):
             print()
             print(C.CYN + UI.box_top() + C.RST)
             print(C.CYN + UI.box_row(f"Prochaine verification: {next_str}", 'center') + C.RST)
-            print(C.CYN + UI.box_row("Ctrl+C pour arreter", 'center', C.DIM) + C.RST)
+            print(C.CYN + UI.box_row("[M] Menu  |  Ctrl+C Quitter", 'center', C.DIM) + C.RST)
             print(C.CYN + UI.box_bot() + C.RST)
             
-            time.sleep(CHECK_INTERVAL_HOURS * 3600)
+            # Attente interruptible
+            if wait_with_keycheck(CHECK_INTERVAL_HOURS * 3600):
+                # Retour au menu demande
+                print()
+                UI.status("Retour au menu...")
+                time.sleep(1)
+                return  # Retour au menu principal
             
     except KeyboardInterrupt:
         print()
         UI.warn("Suivi arrete")
-        UI.status("Relancez pour reprendre")
+        UI.status("Retour au menu...")
+        time.sleep(1)
 
 
 # =============================================================================
