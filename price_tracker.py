@@ -292,46 +292,40 @@ def search_product(query):
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, 'html.parser')
+        text = resp.text
         
         products = []
-        links = soup.find_all('a', href=re.compile(r'/preisvergleich/.*-p\d+'))
-        
         seen = set()
-        for link in links:
-            href = link.get('href', '')
-            m = re.search(r'-p(\d+)', href)
-            if m:
-                pid = m.group(1)
-                if pid not in seen:
-                    seen.add(pid)
+        
+        # Pattern pour extraire les produits depuis les URLs
+        # Format: /preisvergleich/Category/Product-Name-p123456
+        pattern = r'/preisvergleich/[^/]+/([^"\?]+)-p(\d+)'
+        matches = re.findall(pattern, text)
+        
+        for name_raw, pid in matches:
+            if pid not in seen:
+                seen.add(pid)
+                
+                # Nettoyer le nom (remplacer - par espace)
+                name = name_raw.replace('-', ' ')
+                
+                # Filtrer les noms trop courts ou invalides
+                if len(name) > 10 and 'CHF' not in name:
+                    # Reconstruire l'URL
+                    href = f"/preisvergleich/Grafikkarten/{name_raw}-p{pid}"
+                    # Chercher la vraie URL dans le texte
+                    url_match = re.search(rf'/preisvergleich/[^"\s]+{pid}[^"\s]*', text)
+                    if url_match:
+                        href = url_match.group(0).split('"')[0].split(')')[0]
                     
-                    # Essayer plusieurs methodes pour obtenir le nom
-                    name = link.get_text(strip=True)
+                    products.append({
+                        'id': pid,
+                        'name': name[:100],
+                        'url': f"https://www.toppreise.ch{href}" if href.startswith('/') else href,
+                    })
                     
-                    # Si pas de texte, chercher dans title ou alt de l'image
-                    if not name or len(name) < 10:
-                        name = link.get('title', '')
-                    if not name or len(name) < 10:
-                        img = link.find('img')
-                        if img:
-                            name = img.get('alt', '')
-                    
-                    # En dernier recours, extraire de l'URL
-                    if not name or len(name) < 10:
-                        url_match = re.search(r'/preisvergleich/[^/]+/([^?]+)-p\d+', href)
-                        if url_match:
-                            name = url_match.group(1).replace('-', ' ')
-                    
-                    # Filtrer les noms avec CHF (ce sont des liens de prix)
-                    if name and len(name) > 5 and 'CHF' not in name:
-                        products.append({
-                            'id': pid,
-                            'name': name[:100],
-                            'url': f"https://www.toppreise.ch{href}" if href.startswith('/') else href,
-                        })
-                        if len(products) >= 10:
-                            break
+                    if len(products) >= 10:
+                        break
         
         return products
         
@@ -348,83 +342,62 @@ def get_product_details(url, silent=False):
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, 'html.parser')
+        text = resp.text
+        soup = BeautifulSoup(text, 'html.parser')
         
-        # Titre
+        # Titre depuis h1
         title = ""
         h1 = soup.find('h1')
         if h1:
             title = h1.get_text(strip=True)
         
-        # Reference
+        # Reference (entre parentheses a la fin)
         reference = ""
         ref_m = re.search(r'\(([^)]+)\)\s*$', title)
         if ref_m:
             reference = ref_m.group(1)
         
-        # Offres - parsing ameliore
+        # Extraction des offres
         offers = []
-        text = resp.text
-        
-        # Pattern 1: CHF XXX inkl. Versand:X.XX ... [shop_name]
-        # Format typique: CHF  1'039.00 inkl. Versand:0.00   [wamo24.ch]
-        patterns = re.findall(
-            r'CHF\s*([\d\'\.,]+)\s*inkl\.\s*Versand[:\s][\d\.,]+[^[]*\[([\w\.\-\s]+)\]',
-            text
-        )
-        
         seen = set()
-        for price, shop in patterns:
-            shop = shop.strip()
-            # Filtrer les faux positifs
-            if shop and len(shop) > 2 and shop not in seen:
-                # Ignorer les liens de navigation
-                if any(x in shop.lower() for x in ['toppreise', 'preisvergleich', 'produktsuche', 'shops/']):
-                    continue
+        
+        # Pattern: CHF XXX inkl. Versand:Y.YY ... /shops/SHOPNAME-sID
+        pattern = r'CHF\s*([\d\'\.,]+)\s*inkl\.\s*Versand[:\s]*[\d\.,]+[^/]{0,200}?/shops/([\w\-\.]+)-s(\d+)'
+        matches = re.findall(pattern, text, re.DOTALL)
+        
+        for price, shop_slug, shop_id in matches:
+            # Nettoyer le nom du shop
+            shop = shop_slug.replace('-', ' ').strip()
+            
+            if shop and len(shop) > 1 and shop not in seen:
                 seen.add(shop)
                 price_clean = price.replace("'", "").replace(",", ".")
                 try:
+                    price_float = float(price_clean)
                     offers.append({
                         'shop': shop,
-                        'price': float(price_clean),
+                        'price': price_float,
                     })
                 except ValueError:
                     pass
-                if len(offers) >= 15:
+                
+                if len(offers) >= 20:
                     break
         
-        # Pattern 2 de secours: chercher dans les liens /shops/
-        if len(offers) < 5:
-            shop_patterns = re.findall(
-                r'CHF\s*([\d\'\.,]+)\s*inkl\.[^♜♪☚☛☝☞☙☫☭\n]{0,50}?/shops/([\w\-]+)-s\d+',
-                text
-            )
-            for price, shop in shop_patterns:
-                shop = shop.replace('-', ' ').strip()
-                if shop and shop not in seen:
-                    seen.add(shop)
-                    price_clean = price.replace("'", "").replace(",", ".")
-                    try:
-                        offers.append({
-                            'shop': shop,
-                            'price': float(price_clean),
-                        })
-                    except ValueError:
-                        pass
-                    if len(offers) >= 15:
-                        break
-        
+        # Trier par prix
         offers.sort(key=lambda x: x['price'])
         
-        # Meilleur prix
+        # Meilleur prix depuis "X Angebote ab CHF Y"
         best = None
-        m = re.search(r'(\d+)\s*Angebote\s*ab\s*CHF\s*([\d\'\.,]+)', text)
+        m = re.search(r'(\d+)\s*Angebote?\s*ab\s*CHF\s*([\d\'\.,]+)', text)
         if m:
             try:
                 best = float(m.group(2).replace("'", "").replace(",", "."))
             except:
-                best = offers[0]['price'] if offers else None
-        elif offers:
+                pass
+        
+        # Fallback sur la premiere offre
+        if not best and offers:
             best = offers[0]['price']
         
         return {
