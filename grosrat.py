@@ -145,8 +145,8 @@ def interactive_menu(title, options, box_color=None):
 def wait_with_keycheck(seconds):
     """
     Attend pendant 'seconds' secondes, mais verifie regulierement 
-    si la touche M est pressee pour retourner au menu.
-    Retourne True si M est presse, False sinon.
+    si la touche Entree est pressee pour retourner au menu.
+    Retourne True si Entree est presse, False sinon.
     """
     end_time = time.time() + seconds
     
@@ -155,14 +155,14 @@ def wait_with_keycheck(seconds):
         if HAS_MSVCRT:
             # Windows
             if msvcrt.kbhit():
-                key = msvcrt.getch().decode('utf-8', errors='ignore').lower()
-                if key == 'm':
+                key = msvcrt.getch()
+                if key == b'\r':  # Touche Entree
                     return True
         else:
             # Unix - utilise select pour verifier stdin
             if select.select([sys.stdin], [], [], 0)[0]:
-                key = sys.stdin.read(1).lower()
-                if key == 'm':
+                key = sys.stdin.read(1)
+                if key == '\r' or key == '\n':  # Touche Entree
                     return True
         
         # Petite pause pour ne pas surcharger le CPU
@@ -825,7 +825,12 @@ def start_multi_tracking(data):
             print()
             print(C.CYN + UI.box_top() + C.RST)
             print(C.CYN + UI.box_row(f"Prochaine verification: {next_str}", 'center') + C.RST)
-            print(C.CYN + UI.box_row("[M] Menu  |  Ctrl+C Quitter", 'center', C.DIM) + C.RST)
+            print(C.CYN + UI.box_mid() + C.RST)
+            print(C.CYN + UI.box_row("") + C.RST)
+            print(C.CYN + UI.box_row(" >> Retour au menu", color=C.BOLD + '\033[7m') + C.RST)
+            print(C.CYN + UI.box_row("") + C.RST)
+            print(C.CYN + UI.box_mid() + C.RST)
+            print(C.CYN + UI.box_row("Entree: valider", 'center', C.DIM) + C.RST)
             print(C.CYN + UI.box_bot() + C.RST)
             
             # Attente interruptible
