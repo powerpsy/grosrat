@@ -19,6 +19,7 @@ import sys
 
 CHECK_INTERVAL_HOURS = 6
 CONFIG_FILE = "tracked_products.json"
+VERSION = "2.0"
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -110,7 +111,7 @@ class UI:
         
         print(C.CYN + cls.box_top() + C.RST)
         print(C.CYN + cls.box_row("") + C.RST)
-        print(C.CYN + cls.box_row("GROSRAT - Price Tracker", 'center', C.BWHT + C.BOLD) + C.RST)
+        print(C.CYN + cls.box_row(f"GROSRAT v{VERSION} - Price Tracker", 'center', C.BWHT + C.BOLD) + C.RST)
         print(C.CYN + cls.box_row("Suivi de prix Toppreise.ch avec alertes Discord", 'center', C.WHT) + C.RST)
         print(C.CYN + cls.box_row("") + C.RST)
         print(C.CYN + cls.box_bot() + C.RST)
@@ -486,7 +487,7 @@ def check_price(product, threshold, webhook):
 
 
 def save_config(product, threshold, webhook):
-    """Sauvegarde la configuration"""
+    """Sauvegarde la configuration (ancien format - legacy)"""
     config = {
         'product': product,
         'threshold': threshold,
@@ -498,8 +499,64 @@ def save_config(product, threshold, webhook):
     UI.ok(f"Config sauvegardee: {CONFIG_FILE}")
 
 
+def load_tracked_products():
+    """Charge la liste des produits suivis"""
+    if not os.path.exists(CONFIG_FILE):
+        return {'products': [], 'webhook': ''}
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            # Migration ancien format
+            if 'product' in data and 'products' not in data:
+                return {
+                    'products': [{
+                        'id': 1,
+                        'product': data['product'],
+                        'threshold': data['threshold'],
+                        'active': True,
+                        'created': data.get('created', datetime.now().isoformat())
+                    }],
+                    'webhook': data.get('webhook', '')
+                }
+            return data
+    except:
+        return {'products': [], 'webhook': ''}
+
+
+def save_tracked_products(data):
+    """Sauvegarde la liste des produits suivis"""
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def add_tracked_product(data, product, threshold):
+    """Ajoute un produit a la liste de suivi"""
+    # Generer un nouvel ID
+    max_id = 0
+    for p in data['products']:
+        if p.get('id', 0) > max_id:
+            max_id = p['id']
+    
+    new_entry = {
+        'id': max_id + 1,
+        'product': product,
+        'threshold': threshold,
+        'active': True,
+        'created': datetime.now().isoformat()
+    }
+    data['products'].append(new_entry)
+    save_tracked_products(data)
+    return new_entry['id']
+
+
+def remove_tracked_product(data, product_id):
+    """Supprime un produit de la liste"""
+    data['products'] = [p for p in data['products'] if p.get('id') != product_id]
+    save_tracked_products(data)
+
+
 def start_tracking(product, threshold, webhook):
-    """Demarre le suivi automatique"""
+    """Demarre le suivi automatique d'un seul produit (mode legacy)"""
     UI.header()
     UI.section("DEMARRAGE DU SUIVI", C.GRN)
     
@@ -542,6 +599,307 @@ def start_tracking(product, threshold, webhook):
         print()
         UI.warn("Suivi arrete")
         UI.status("Relancez pour reprendre")
+
+
+def start_multi_tracking(data):
+    """Demarre le suivi automatique de plusieurs produits"""
+    webhook = data.get('webhook', '')
+    products = [p for p in data['products'] if p.get('active', True)]
+    
+    if not products:
+        UI.err("Aucun produit actif a suivre")
+        return
+    
+    UI.header()
+    UI.section("DEMARRAGE DU SUIVI MULTI-ARTICLES", C.GRN)
+    
+    UI.info("Articles", f"{len(products)} produit(s)")
+    UI.info("Intervalle", f"{CHECK_INTERVAL_HOURS}h (4x/jour)")
+    UI.info("Discord", "Actif" if webhook else "Inactif")
+    
+    print()
+    for p in products:
+        title = p['product']['title'][:45]
+        print(f"  {C.CYN}[{p['id']}]{C.RST} {title} - Seuil: CHF {p['threshold']:.2f}")
+    
+    print()
+    print(f"  {C.DIM}Ctrl+C pour arreter{C.RST}")
+    time.sleep(2)
+    
+    count = 0
+    
+    try:
+        while True:
+            count += 1
+            UI.header()
+            
+            # Recharger les produits (au cas ou modifies)
+            data = load_tracked_products()
+            products = [p for p in data['products'] if p.get('active', True)]
+            webhook = data.get('webhook', '')
+            
+            print()
+            print(C.YLW + UI.box_top() + C.RST)
+            print(C.YLW + UI.box_row(f"SUIVI MULTI-ARTICLES - Verification #{count}", 'center', C.BOLD) + C.RST)
+            print(C.YLW + UI.box_row(datetime.now().strftime('%d.%m.%Y %H:%M:%S'), 'center', C.DIM) + C.RST)
+            print(C.YLW + UI.box_bot() + C.RST)
+            
+            # Verifier chaque produit
+            for entry in products:
+                product = entry['product']
+                threshold = entry['threshold']
+                
+                print()
+                title = product['title']
+                if len(title) > 50:
+                    title = title[:47] + '...'
+                
+                print(f"  {C.BCYN}[{entry['id']}]{C.RST} {C.WHT}{title}{C.RST}")
+                
+                price, offers = check_price(product, threshold, webhook)
+                
+                if price:
+                    if price <= threshold:
+                        status = f"{C.BGRN}CHF {price:.2f} <= {threshold:.2f} [ALERTE!]{C.RST}"
+                    else:
+                        diff = price - threshold
+                        status = f"{C.YLW}CHF {price:.2f}{C.RST} (seuil: {threshold:.2f}, ecart: +{diff:.2f})"
+                    print(f"      {status}")
+                    
+                    if offers:
+                        best = offers[0]
+                        print(f"      {C.DIM}Meilleur: {best['shop']} a CHF {best['price']:.2f}{C.RST}")
+                else:
+                    print(f"      {C.BRED}Erreur de chargement{C.RST}")
+                
+                time.sleep(1)  # Pause entre requetes
+            
+            # Prochaine verification
+            next_t = datetime.now().timestamp() + (CHECK_INTERVAL_HOURS * 3600)
+            next_str = datetime.fromtimestamp(next_t).strftime('%d.%m.%Y %H:%M')
+            
+            print()
+            print(C.CYN + UI.box_top() + C.RST)
+            print(C.CYN + UI.box_row(f"Prochaine verification: {next_str}", 'center') + C.RST)
+            print(C.CYN + UI.box_row("Ctrl+C pour arreter", 'center', C.DIM) + C.RST)
+            print(C.CYN + UI.box_bot() + C.RST)
+            
+            time.sleep(CHECK_INTERVAL_HOURS * 3600)
+            
+    except KeyboardInterrupt:
+        print()
+        UI.warn("Suivi arrete")
+        UI.status("Relancez pour reprendre")
+
+
+# =============================================================================
+# ECRANS MULTI-ARTICLES
+# =============================================================================
+
+def screen_main_menu():
+    """Menu principal"""
+    data = load_tracked_products()
+    nb_products = len(data['products'])
+    nb_active = len([p for p in data['products'] if p.get('active', True)])
+    
+    UI.header()
+    
+    print()
+    print(C.YLW + UI.box_top() + C.RST)
+    print(C.YLW + UI.box_row("MENU PRINCIPAL", 'center', C.BOLD) + C.RST)
+    print(C.YLW + UI.box_mid() + C.RST)
+    print(C.YLW + UI.box_row("") + C.RST)
+    print(C.YLW + UI.box_row(f"  [1]  Ajouter un article a suivre", color=C.WHT) + C.RST)
+    print(C.YLW + UI.box_row(f"  [2]  Voir les articles suivis ({nb_products})", color=C.WHT) + C.RST)
+    print(C.YLW + UI.box_row(f"  [3]  Supprimer un article", color=C.WHT) + C.RST)
+    print(C.YLW + UI.box_row(f"  [4]  Configurer Discord", color=C.WHT) + C.RST)
+    print(C.YLW + UI.box_row("") + C.RST)
+    print(C.YLW + UI.box_mid() + C.RST)
+    
+    if nb_active > 0:
+        print(C.YLW + UI.box_row(f"  [S]  DEMARRER LE SUIVI ({nb_active} actifs)", color=C.BGRN) + C.RST)
+    else:
+        print(C.YLW + UI.box_row(f"  [S]  Demarrer le suivi (aucun article)", color=C.DIM) + C.RST)
+    
+    print(C.YLW + UI.box_row(f"  [Q]  Quitter", color=C.DIM) + C.RST)
+    print(C.YLW + UI.box_row("") + C.RST)
+    print(C.YLW + UI.box_bot() + C.RST)
+    
+    choice = UI.prompt("Choix").lower()
+    return choice
+
+
+def screen_list_products():
+    """Affiche la liste des produits suivis"""
+    data = load_tracked_products()
+    
+    UI.header()
+    UI.section(f"ARTICLES SUIVIS ({len(data['products'])})", C.CYN)
+    
+    if not data['products']:
+        print()
+        print(f"  {C.DIM}Aucun article suivi pour le moment.{C.RST}")
+        print(f"  {C.DIM}Utilisez [1] pour ajouter un article.{C.RST}")
+    else:
+        print()
+        for entry in data['products']:
+            product = entry['product']
+            threshold = entry['threshold']
+            active = entry.get('active', True)
+            
+            status_icon = C.BGRN + "[ON] " if active else C.BRED + "[OFF]"
+            title = product['title']
+            if len(title) > 45:
+                title = title[:42] + '...'
+            
+            print(f"  {C.YLW}[{entry['id']}]{C.RST} {status_icon}{C.RST} {C.WHT}{title}{C.RST}")
+            print(f"       {C.DIM}Ref: {product.get('reference', 'N/A')} | Seuil: CHF {threshold:.2f}{C.RST}")
+            print()
+    
+    # Webhook status
+    print()
+    webhook = data.get('webhook', '')
+    if webhook:
+        print(f"  {C.MAG}Discord:{C.RST} {C.BGRN}Configure{C.RST}")
+    else:
+        print(f"  {C.MAG}Discord:{C.RST} {C.DIM}Non configure{C.RST}")
+    
+    print()
+    input(f"  {C.DIM}Appuyez sur Entree pour continuer...{C.RST}")
+
+
+def screen_remove_product():
+    """Supprime un produit"""
+    data = load_tracked_products()
+    
+    UI.header()
+    UI.section("SUPPRIMER UN ARTICLE", C.RED)
+    
+    if not data['products']:
+        print()
+        UI.warn("Aucun article a supprimer")
+        time.sleep(1)
+        return
+    
+    print()
+    for entry in data['products']:
+        product = entry['product']
+        title = product['title'][:50]
+        print(f"  {C.YLW}[{entry['id']}]{C.RST} {title}")
+    
+    print()
+    print(f"  {C.DIM}0 = annuler{C.RST}")
+    
+    try:
+        choice = int(UI.prompt("ID a supprimer"))
+        if choice == 0:
+            return
+        
+        # Trouver le produit
+        found = None
+        for entry in data['products']:
+            if entry['id'] == choice:
+                found = entry
+                break
+        
+        if found:
+            if UI.confirm(f"Supprimer '{found['product']['title'][:40]}...'?"):
+                remove_tracked_product(data, choice)
+                UI.ok("Article supprime")
+                time.sleep(1)
+        else:
+            UI.err("ID non trouve")
+            time.sleep(1)
+    except ValueError:
+        UI.err("ID invalide")
+        time.sleep(1)
+
+
+def screen_config_discord():
+    """Configure le webhook Discord global"""
+    data = load_tracked_products()
+    
+    UI.header()
+    UI.section("CONFIGURATION DISCORD", C.MAG)
+    
+    current = data.get('webhook', '')
+    
+    print()
+    if current:
+        print(f"  {C.WHT}Webhook actuel:{C.RST}")
+        print(f"  {C.DIM}{current[:50]}...{C.RST}")
+    else:
+        print(f"  {C.DIM}Aucun webhook configure{C.RST}")
+    
+    print()
+    print(f"  {C.CYN}Creation webhook:{C.RST}")
+    print(f"  {C.DIM}Discord > Serveur > Parametres > Integrations > Webhooks{C.RST}")
+    
+    print()
+    print(f"  {C.DIM}Laissez vide pour supprimer le webhook actuel.{C.RST}")
+    
+    webhook = UI.prompt("Nouveau webhook")
+    
+    if webhook:
+        if not webhook.startswith("https://discord.com/api/webhooks/"):
+            UI.warn("URL non standard")
+            if not UI.confirm("Continuer quand meme?"):
+                return
+    
+    data['webhook'] = webhook
+    save_tracked_products(data)
+    
+    if webhook:
+        UI.ok("Webhook configure")
+    else:
+        UI.ok("Webhook supprime")
+    time.sleep(1)
+
+
+def add_product_flow():
+    """Flux d'ajout d'un produit"""
+    # Recherche
+    selected = screen_search()
+    if not selected:
+        return False
+    
+    # Details
+    details = screen_details(selected['url'])
+    if not details:
+        return False
+    
+    # Seuil
+    threshold = screen_threshold(details.get('best_price'))
+    if not threshold:
+        return False
+    
+    # Produit a suivre
+    product = {
+        'title': details['title'],
+        'reference': details['reference'],
+        'url': details['url'],
+        'best_price': details.get('best_price')
+    }
+    
+    # Ajouter a la liste
+    data = load_tracked_products()
+    new_id = add_tracked_product(data, product, threshold)
+    
+    UI.header()
+    UI.section("ARTICLE AJOUTE", C.GRN)
+    
+    print()
+    UI.info("ID", f"#{new_id}")
+    UI.info("Produit", product['title'][:50])
+    UI.info("Seuil", f"CHF {threshold:.2f}")
+    
+    print()
+    UI.ok("L'article a ete ajoute a la liste de suivi!")
+    
+    print()
+    if UI.confirm("Ajouter un autre article?"):
+        return True  # Continuer
+    return False
 
 
 # =============================================================================
@@ -691,38 +1049,49 @@ def main():
     if os.name == 'nt':
         os.system('color')
     
-    # Recherche
-    selected = screen_search()
-    if not selected:
-        return
-    
-    # Details
-    details = screen_details(selected['url'])
-    if not details:
-        return
-    
-    # Seuil
-    threshold = screen_threshold(details.get('best_price'))
-    if not threshold:
-        return
-    
-    # Discord
-    webhook = screen_discord()
-    
-    # Produit a suivre
-    product = {
-        'title': details['title'],
-        'reference': details['reference'],
-        'url': details['url'],
-        'best_price': details.get('best_price')
-    }
-    
-    # Resume et lancement
-    if screen_summary(product, threshold, webhook):
-        start_tracking(product, threshold, webhook)
-    else:
-        UI.header()
-        UI.warn("Suivi non lance. A bientot!")
+    while True:
+        choice = screen_main_menu()
+        
+        if choice == '1':
+            # Ajouter un article
+            while add_product_flow():
+                pass  # Continue tant que l'utilisateur veut ajouter
+        
+        elif choice == '2':
+            # Voir les articles
+            screen_list_products()
+        
+        elif choice == '3':
+            # Supprimer un article
+            screen_remove_product()
+        
+        elif choice == '4':
+            # Configurer Discord
+            screen_config_discord()
+        
+        elif choice == 's':
+            # Demarrer le suivi
+            data = load_tracked_products()
+            active = [p for p in data['products'] if p.get('active', True)]
+            
+            if not active:
+                UI.header()
+                UI.err("Aucun article actif a suivre!")
+                UI.status("Ajoutez des articles avec [1]")
+                time.sleep(2)
+            else:
+                start_multi_tracking(data)
+        
+        elif choice == 'q':
+            UI.header()
+            print()
+            print(f"  {C.CYN}A bientot!{C.RST}")
+            print()
+            break
+        
+        else:
+            # Choix invalide
+            pass
 
 
 if __name__ == "__main__":
